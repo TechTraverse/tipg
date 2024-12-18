@@ -15,6 +15,8 @@ from morecantile.defaults import TileMatrixSets
 from pygeofilter.ast import AstType
 from typing_extensions import Annotated
 
+import xml.etree.ElementTree as ET
+
 from tipg import model
 from tipg.collections import Collection, CollectionList
 from tipg.dependencies import (
@@ -53,7 +55,8 @@ features_settings = FeaturesSettings()
 
 
 jinja2_env = jinja2.Environment(
-    loader=jinja2.ChoiceLoader([jinja2.PackageLoader(__package__, "templates")])
+    loader=jinja2.ChoiceLoader([jinja2.PackageLoader(__package__, "templates")]),
+    autoescape=jinja2.select_autoescape(['html'])  
 )
 DEFAULT_TEMPLATES = Jinja2Templates(env=jinja2_env)
 
@@ -108,6 +111,97 @@ def create_csv_rows(data: Iterable[Dict]) -> Generator[str, None, None]:
     # Write all remaining rows
     for row in data:
         yield writer.writerow(row)
+
+
+def create_kml(data: Iterable[Dict]) -> Generator[str, None, None]:
+    """Creates an iterator that returns lines of KML from an iterable of dicts."""
+
+    # KML Header
+    kml_header = """<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+<Document>"""
+    yield kml_header
+
+    for row in data:
+        placemark = create_placemark(row)
+        placemark_str = ET.tostring(placemark, encoding='unicode')
+        yield placemark_str
+
+    kml_footer = "</Document></kml>"
+    yield kml_footer
+
+def parse_polygon_wkt(geometry: str) -> str:
+    """Parses WKT-like POLYGON string into KML-friendly coordinates."""
+
+    # Remove SRID prefix if it exists
+    if geometry.startswith("SRID="):
+        geometry = geometry.split(";")[1]
+
+    # Strip off the "POLYGON((" and "))" parts
+    geometry = geometry.replace("POLYGON((", "").replace("))", "")
+
+    # Split coordinates, ensuring correct order (lon,lat)
+    coords = []
+    for coord in geometry.split(","):
+        lon, lat = coord.strip().split()
+        coords.append(f"{lon},{lat}")
+    
+    return " ".join(coords)
+
+
+def create_placemark(row: Dict) -> ET.Element:
+    """Creates a KML Placemark from a dict."""
+    placemark = ET.Element("Placemark")
+    
+    name = ET.SubElement(placemark, "name")
+    name.text = str(row.get("itemId", "No Name"))
+    description = ET.SubElement(placemark, "description")
+    description_text = "<table>"
+    for key, value in row.items():
+        description_text += f"<tr><td>{key}</td><td>{value}</td></tr>"
+    description_text += "</table>"
+    description.text = description_text
+    
+    frp = row.get("frp", 0)
+    style_id = f"style_{frp}"
+    dynamic_style = ET.SubElement(placemark, "Style", id=style_id)
+    poly_style = ET.SubElement(dynamic_style, "PolyStyle")
+    color = ET.SubElement(poly_style, "color")
+    color.text = get_kml_color(frp)
+    
+    geometry = row.get("geometry", "")
+    # Single item request has geometry as a tuple for some reason
+    if isinstance(geometry, tuple):
+        geometry = geometry[0]
+    if "POLYGON" in geometry:
+        polygon = ET.SubElement(placemark, "Polygon")
+        outer_boundary = ET.SubElement(polygon, "outerBoundaryIs")
+        linear_ring = ET.SubElement(outer_boundary, "LinearRing")
+        coords = ET.SubElement(linear_ring, "coordinates")
+        coords.text = parse_polygon_wkt(geometry)
+    else:
+        latitude = row.get("latitude", "0")
+        longitude = row.get("longitude", "0")
+        point = ET.SubElement(placemark, "Point")
+        coords = ET.SubElement(point, "coordinates")
+        coords.text = f"{longitude},{latitude}"
+
+    return placemark
+
+def get_kml_color(frp: int) -> str:
+    """Returns KML color based on the frp value."""
+    if frp == 0:
+        return "7fcccccc"
+    elif frp <= 10:
+        return "7f00ffff"
+    elif frp <= 100:
+        return "7f00a5ff"
+    elif frp <= 1000:
+        return "7f0000ff"
+    elif frp <= 10000:
+        return "7f00008b"
+    else:
+        return "7fff00ff"
 
 
 def create_html_response(
@@ -183,7 +277,7 @@ class EndpointsFactory(metaclass=abc.ABCMeta):
     # Full application with Landing and Conformance
     with_common: bool = True
 
-    title: str = "OGC API"
+    title: str = "NOAA NESDIS Wildland Fire OGC API"
 
     def __post_init__(self):
         """Post Init: register route and configure specific options."""
@@ -363,47 +457,6 @@ class OGCFeaturesFactory(EndpointsFactory):
                 href=self.url_for(request, "collections"),
                 type=MediaType.json,
                 rel="data",
-            ),
-            model.Link(
-                title="Collection metadata (Template URL)",
-                href=self.url_for(
-                    request,
-                    "collection",
-                    collectionId="{collectionId}",
-                ),
-                type=MediaType.json,
-                rel="data",
-                templated=True,
-            ),
-            model.Link(
-                title="Collection queryables (Template URL)",
-                href=self.url_for(
-                    request,
-                    "queryables",
-                    collectionId="{collectionId}",
-                ),
-                type=MediaType.schemajson,
-                rel="queryables",
-                templated=True,
-            ),
-            model.Link(
-                title="Collection Features (Template URL)",
-                href=self.url_for(request, "items", collectionId="{collectionId}"),
-                type=MediaType.geojson,
-                rel="data",
-                templated=True,
-            ),
-            model.Link(
-                title="Collection Feature (Template URL)",
-                href=self.url_for(
-                    request,
-                    "item",
-                    collectionId="{collectionId}",
-                    itemId="{itemId}",
-                ),
-                type=MediaType.geojson,
-                rel="data",
-                templated=True,
             ),
         ]
 
@@ -684,6 +737,7 @@ class OGCFeaturesFactory(EndpointsFactory):
                         MediaType.json.value: {},
                         MediaType.geojsonseq.value: {},
                         MediaType.ndjson.value: {},
+                        MediaType.kml.value: {},
                     },
                     "model": model.Items,
                 },
@@ -727,7 +781,7 @@ class OGCFeaturesFactory(EndpointsFactory):
                     ge=0,
                     description="Starts the response at an offset.",
                 ),
-            ] = None,
+            ] = 0,
             bbox_only: Annotated[
                 Optional[bool],
                 Query(
@@ -775,7 +829,8 @@ class OGCFeaturesFactory(EndpointsFactory):
                 MediaType.csv,
                 MediaType.json,
                 MediaType.ndjson,
-            ):
+                MediaType.kml,
+            ):   
                 if any(f.get("geometry", None) is not None for f in item_list["items"]):
                     rows = (
                         {
@@ -806,6 +861,18 @@ class OGCFeaturesFactory(EndpointsFactory):
                         },
                     )
 
+                # KML Response
+                if output_type == MediaType.kml:
+                    kml = list(create_kml(rows))
+                    return StreamingResponse(
+                        kml,
+                        media_type=MediaType.kml,
+                        headers={
+                            "Content-Disposition": "attachment;filename=items.kml",
+                            "Content-Type": "application/vnd.google-earth.kml+xml",
+                        },
+                    )
+                    
                 # JSON Response
                 if output_type == MediaType.json:
                     return ORJSONResponse(list(rows))
@@ -930,7 +997,7 @@ class OGCFeaturesFactory(EndpointsFactory):
                     (orjsonDumps(f) + b"\n" for f in data["features"]),  # type: ignore
                     media_type=MediaType.geojsonseq,
                     headers={
-                        "Content-Disposition": "attachment;filename=items.geojson"
+                        "Content-Disposition": "attachment;filename=items-geojson-seq.geojson"
                     },
                 )
 
@@ -1025,6 +1092,7 @@ class OGCFeaturesFactory(EndpointsFactory):
                 MediaType.csv,
                 MediaType.json,
                 MediaType.ndjson,
+                MediaType.kml,
             ):
                 row = {
                     "collectionId": collection.id,
@@ -1058,7 +1126,16 @@ class OGCFeaturesFactory(EndpointsFactory):
                             "Content-Disposition": "attachment;filename=items.ndjson"
                         },
                     )
-
+                if output_type == MediaType.kml:
+                    kml = create_kml(rows)
+                    return StreamingResponse(
+                        kml,
+                        media_type=MediaType.kml,
+                        headers={
+                            "Content-Disposition": "attachment;filename=items.kml",
+                            "Content-Type": "application/vnd.google-earth.kml+xml",
+                        },
+                    )
             data = {
                 **feature,  # type: ignore
                 "links": [
@@ -1111,62 +1188,6 @@ class OGCTilesFactory(EndpointsFactory):
         """OGC Tiles API links."""
         links = [
             model.Link(
-                title="Collection Vector Tiles (Template URL)",
-                href=self.url_for(
-                    request,
-                    "collection_get_tile",
-                    collectionId="{collectionId}",
-                    z="{z}",
-                    x="{x}",
-                    y="{y}",
-                ),
-                type=MediaType.mvt,
-                rel="data",
-                templated=True,
-            ),
-            model.Link(
-                title="Collection TileSets (Template URL)",
-                href=self.url_for(
-                    request,
-                    "collection_tileset_list",
-                    collectionId="{collectionId}",
-                ),
-                type=MediaType.json,
-                rel="data",
-                templated=True,
-            ),
-            model.Link(
-                title="Collection TileSet (Template URL)",
-                href=self.url_for(
-                    request,
-                    "collection_tileset",
-                    collectionId="{collectionId}",
-                    tileMatrixSetId="{tileMatrixSetId}",
-                ),
-                type=MediaType.json,
-                rel="data",
-                templated=True,
-            ),
-        ]
-
-        if self.with_viewer:
-            links.append(
-                model.Link(
-                    title="Collection Map viewer (Template URL)",
-                    href=self.url_for(
-                        request,
-                        "viewer_endpoint",
-                        collectionId="{collectionId}",
-                        tileMatrixSetId="{tileMatrixSetId}",
-                    ),
-                    type=MediaType.html,
-                    rel="data",
-                    templated=True,
-                )
-            )
-
-        links += [
-            model.Link(
                 title="TileMatrixSets",
                 href=self.url_for(
                     request,
@@ -1174,17 +1195,6 @@ class OGCTilesFactory(EndpointsFactory):
                 ),
                 type=MediaType.json,
                 rel="data",
-            ),
-            model.Link(
-                title="TileMatrixSet (Template URL)",
-                href=self.url_for(
-                    request,
-                    "tilematrixset",
-                    tileMatrixSetId="{tileMatrixSetId}",
-                ),
-                type=MediaType.json,
-                rel="data",
-                templated=True,
             ),
         ]
 
@@ -1530,14 +1540,6 @@ class OGCTilesFactory(EndpointsFactory):
             operation_id=".collection.vector.getTileTms",
             tags=["OGC Tiles API"],
         )
-        @self.router.get(
-            "/collections/{collectionId}/tiles/{z}/{x}/{y}",
-            response_class=Response,
-            responses={200: {"content": {MediaType.mvt.value: {}}}},
-            operation_id=".collection.vector.getTile",
-            tags=["OGC Tiles API"],
-            deprecated=True,
-        )
         async def collection_get_tile(
             request: Request,
             collection: Annotated[Collection, Depends(self.collection_dependency)],
@@ -1611,16 +1613,6 @@ class OGCTilesFactory(EndpointsFactory):
             response_class=ORJSONResponse,
             operation_id=".collection.vector.getTileJSONTms",
             tags=["OGC Tiles API"],
-        )
-        @self.router.get(
-            "/collections/{collectionId}/tilejson.json",
-            response_model=model.TileJSON,
-            responses={200: {"description": "Return a tilejson"}},
-            response_model_exclude_none=True,
-            response_class=ORJSONResponse,
-            operation_id=".collection.vector.getTileJSON",
-            tags=["OGC Tiles API"],
-            deprecated=True,
         )
         async def collection_tilejson(
             request: Request,
@@ -1714,16 +1706,6 @@ class OGCTilesFactory(EndpointsFactory):
             operation_id=".collection.vector.getStyleJSONTms",
             tags=["OGC Tiles API"],
         )
-        @self.router.get(
-            "/collections/{collectionId}/style.json",
-            response_model=model.StyleJSON,
-            responses={200: {"description": "Return a StyleJSON"}},
-            response_model_exclude_none=True,
-            response_class=ORJSONResponse,
-            operation_id=".collection.vector.getStyleJSON",
-            tags=["OGC Tiles API"],
-            deprecated=True,
-        )
         async def collection_stylejson(
             request: Request,
             collection: Annotated[Collection, Depends(self.collection_dependency)],
@@ -1811,8 +1793,71 @@ class OGCTilesFactory(EndpointsFactory):
                     "type": "fill",
                     "filter": ["==", ["geometry-type"], "Polygon"],
                     "paint": {
-                        "fill-color": "rgba(200, 100, 240, 0.4)",
-                        "fill-outline-color": "#000",
+                        "fill-color": [
+                            "case",
+                            ['==', ['get', 'frp'], 0],
+                                '#ccc',    # gray color for 0
+                            [
+                                'interpolate',
+                                ['linear'],
+                                ['get', 'frp'],
+                                0.00001,   # value just above zero to start with yellow
+                                '#FFFF00', # yellow color for values just above 0
+                                10,
+                                '#FFA500', # orange color for values between 10 - 100
+                                100,
+                                '#FF0000', # red color for values between 100 - 1000
+                                1000,
+                                '#8B0000', # dark red color for values between 1000 - 10000
+                                10000,
+                                '#FF00FF'  # magenta color for values over 10000
+                            ]
+                        ],
+                        "fill-opacity": 0.5,
+                    },
+                    "html": {
+                        "zero": {
+                            "fillColor": '#ccc',
+                            "fillOpacity": 0.5,
+                            "weight": 3,
+                            "opacity": 0.5,
+                            "color": '#ccc',
+                        },
+                        "ten": {
+                            "fillColor": '#FFFF00',
+                            "fillOpacity": 0.5,
+                            "weight": 3,
+                            "opacity": 0.5,
+                            "color": '#FFFF00',
+                        },
+                        "hundred": {
+                            "fillColor": '#FFA500',
+                            "fillOpacity": 0.5,
+                            "weight": 3,
+                            "opacity": 0.5,
+                            "color": '#FFA500',
+                        },
+                        "thousand": {
+                            "fillColor": '#FF0000',
+                            "fillOpacity": 0.5,
+                            "weight": 3,
+                            "opacity": 0.5,
+                            "color": '#FF0000',
+                        },
+                        "tenK": {
+                            "fillColor": '#8B0000',
+                            "fillOpacity": 0.5,
+                            "weight": 3,
+                            "opacity": 0.5,
+                            "color": '#8B0000',
+                        },
+                        "highest": {
+                            "fillColor": '#FF00FF',
+                            "fillOpacity": 0.5,
+                            "weight": 3,
+                            "opacity": 0.5,
+                            "color": '#FF00FF',
+                        },
                     },
                 },
                 {
@@ -1845,20 +1890,6 @@ class OGCTilesFactory(EndpointsFactory):
 
         if self.with_viewer:
 
-            @self.router.get(
-                "/collections/{collectionId}/{tileMatrixSetId}/viewer",
-                response_class=HTMLResponse,
-                operation_id=".collection.vector.viewerTms",
-                deprecated=True,
-                tags=["Map Viewer"],
-            )
-            @self.router.get(
-                "/collections/{collectionId}/viewer",
-                response_class=HTMLResponse,
-                operation_id=".collection.vector.viewer",
-                deprecated=True,
-                tags=["Map Viewer"],
-            )
             @self.router.get(
                 "/collections/{collectionId}/tiles/{tileMatrixSetId}/viewer",
                 response_class=HTMLResponse,

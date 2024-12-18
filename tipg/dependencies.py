@@ -156,11 +156,11 @@ def ItemsOutputType(
     f: Annotated[
         Optional[ItemsResponseType],
         Query(
-            description="Response MediaType. Defaults to endpoint's default or value defined in `accept` header."
+            description=f"Response MediaType. Defaults to endpoint's default or value defined in `accept` header.\nAvailable values: geojson, html, json, csv, geojsonseq, ndjson, kml"
         ),
     ] = None,
 ) -> Optional[MediaType]:
-    """Output MediaType: geojson, html, json, csv, geojsonseq, ndjson."""
+    """Output MediaType: geojson, html, json, csv, geojsonseq, ndjson, kml."""
     if f:
         return MediaType[f]
 
@@ -188,12 +188,49 @@ def ItemOutputType(
 def bbox_query(
     bbox: Annotated[
         Optional[str],
-        Query(description="Spatial Filter."),
-    ] = None,
+        Query(description=("Only features that have a geometry that intersects the bounding box are selected. "
+        "The bounding box is provided as four or six numbers, depending on whether the "
+        "coordinate reference system includes a vertical axis (height or depth):\n\n"
+
+        "* Lower left corner, coordinate axis 1\n"
+        "* Lower left corner, coordinate axis 2\n"
+        "* Minimum value, coordinate axis 3 (optional)\n"
+        "* Upper right corner, coordinate axis 1\n"
+        "* Upper right corner, coordinate axis 2\n"
+        "* Maximum value, coordinate axis 3 (optional)\n\n"
+
+        "If the value consists of four numbers, the coordinate reference system is "
+        "WGS 84 longitude/latitude (http://www.opengis.net/def/crs/OGC/1.3/CRS84) "
+        "unless a different coordinate reference system is specified in the parameter `bbox-crs`.\n\n"
+
+        "If the value consists of six numbers, the coordinate reference system is WGS 84 "
+        "longitude/latitude/ellipsoidal height (http://www.opengis.net/def/crs/OGC/0/CRS84h) "
+        "unless a different coordinate reference system is specified in the parameter `bbox-crs`.\n\n"
+
+        "The query parameter `bbox-crs` is specified in OGC API - Features - Part 2: Coordinate "
+        "Reference Systems by Reference.\n\n"
+
+        "For WGS 84 longitude/latitude the values are in most cases the sequence of "
+        "minimum longitude, minimum latitude, maximum longitude and maximum latitude. "
+        "However, in cases where the box spans the antimeridian the first value "
+        "(west-most box edge) is larger than the third value (east-most box edge).\n\n"
+
+        "If the vertical axis is included, the third and the sixth number are "
+        "the bottom and the top of the 3-dimensional bounding box.\n\n"
+
+        "If a feature has multiple spatial geometry properties, it is the decision of the "
+        "server whether only a single spatial geometry property is used to determine "
+        "the extent or all relevant geometries."),
+        ),
+    ] = None
 ) -> Optional[List[float]]:
     """BBox dependency."""
     if bbox:
-        bounds = list(map(float, bbox.split(",")))
+        try:
+            bounds = list(map(float, bbox.split(",")))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid bbox parameter")
+        
         if len(bounds) == 4:
             if abs(bounds[0]) > 180 or abs(bounds[2]) > 180:
                 raise InvalidBBox(f"Invalid longitude in bbox: {bounds}")
@@ -222,7 +259,25 @@ def ids_query(
 
 
 def datetime_query(
-    datetime: Annotated[Optional[str], Query(description="Temporal Filter.")] = None,
+    datetime: Annotated[
+        Optional[str],
+        Query(description=("Either a date-time or an interval. Date and time expressions adhere to RFC 3339. "
+        "Intervals may be bounded or half-bounded (double-dots at start or end).\n\n"
+
+        "Examples:\n\n"
+
+        "* A date-time: \"2018-02-12T23:20:50Z\"\n"
+        "* A bounded interval: \"2018-02-12T00:00:00Z/2018-03-18T12:31:12Z\"\n"
+        "* Half-bounded intervals: \"2018-02-12T00:00:00Z/..\" or \"../2018-03-18T12:31:12Z\"\n\n"
+
+        "Only features that have a temporal property that intersects the value of "
+        "`datetime` are selected.\n\n"
+
+        "If a feature has multiple temporal properties, it is the decision of the "
+        "server whether only a single temporal property is used to determine "
+        "the extent or all relevant temporal properties."),
+        ),
+    ] = None,
 ) -> Optional[List[str]]:
     """Datetime dependency."""
     if datetime:
@@ -305,8 +360,8 @@ def filter_query(
 def sortby_query(
     sortby: Annotated[
         Optional[str],
-        Query(
-            description="Column Sort the items by Column (ascending (default) or descending).",
+        Query(description=("Column sort: Use a +/- convention, along with the column name, to sort the column by ascending/descending order.\n\n"
+        "Columns will default to ascending order."),
         ),
     ] = None,
 ):
@@ -441,16 +496,16 @@ def CollectionsParams(
         Query(
             ge=0,
             le=1000,
-            description="Limits the number of collection in the response.",
+            description="Limits the number of collections in the response.",
         ),
-    ] = None,
+    ] = 10,
     offset: Annotated[
         Optional[int],
         Query(
             ge=0,
             description="Starts the response at an offset.",
         ),
-    ] = None,
+    ] = 0,
 ) -> CollectionList:
     """Return Collections Catalog."""
     limit = limit or 0

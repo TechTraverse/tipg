@@ -19,3 +19,4 @@ class MediaType(str, Enum):
     openapi30_yaml = "application/vnd.oai.openapi;version=3.0"
     pbf = "application/x-protobuf"
     mvt = "application/vnd.mapbox-vector-tile"
+    kml = "application/kml"

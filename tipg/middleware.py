@@ -1,6 +1,8 @@
 """tipg middlewares."""
 
 import re
+import logging
+import asyncio
 from datetime import datetime, timedelta
 from typing import Any, Optional, Protocol, Set
 
@@ -13,6 +15,7 @@ from starlette.datastructures import MutableHeaders
 from starlette.requests import Request
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+logger = logging.getLogger(__name__)
 
 class CacheControlMiddleware:
     """MiddleWare to add CacheControl in response headers."""
@@ -77,18 +80,21 @@ class CatalogUpdateMiddleware:
         self,
         app: ASGIApp,
         *,
-        func: CatalogUpdateFunc,
+        func: Any,
         ttl: int = 300,
         **kwargs: Any,
     ) -> None:
-        """Init Middleware."""
+        """Initialize Middleware with lock and last update time tracking."""
         self.app = app
         self.func = func
         self.ttl = ttl
         self.kwargs = kwargs
+        self.lock = asyncio.Lock()  # Async lock for strict sequential control
+        self.last_updated = None
+        self.update_in_progress = False  # Flag to prevent overlapping updates
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send):
-        """Handle call."""
+        """Handle HTTP calls and trigger catalog update if needed."""
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
@@ -100,19 +106,52 @@ class CatalogUpdateMiddleware:
         if not catalog:
             raise MissingCollectionCatalog("Could not find collections catalog.")
 
-        last_updated = catalog["last_updated"]
-        if not last_updated or datetime.now() > (
-            last_updated + timedelta(seconds=self.ttl)
-        ):
-            logger.debug(
-                f"Running catalog refresh in background. Last Updated: {last_updated}"
-            )
-            background = BackgroundTask(
-                self.func,
-                request.app,
-                **self.kwargs,
-            )
+        if self.should_refresh_catalog():
+            if not self.lock.locked():
+                logger.debug(f"Running catalog refresh in background. Last Updated: {self.last_updated}")
+                background = BackgroundTask(self.update_catalog, request.app)
 
         await self.app(scope, receive, send)
         if background:
             await background()
+
+    def should_refresh_catalog(self) -> bool:
+        """Determine if catalog refresh is needed based on TTL and lock status."""
+        now = datetime.now()
+        return (
+            not self.last_updated
+            or now > (self.last_updated + timedelta(seconds=self.ttl))
+            and not self.update_in_progress
+        )
+
+    async def update_catalog(self, app: ASGIApp):
+        """Execute catalog update function with async lock."""
+        async with self.lock:
+            self.update_in_progress = True
+            try:
+                await self.func(app, **self.kwargs)
+                self.last_updated = datetime.now()
+            except Exception as e:
+                logger.error(f"Catalog refresh failed: {e}")
+            finally:
+                self.update_in_progress = False  # Reset flag after completion
+
+
+class ProxyHostMiddleware:
+    def __init__(self, app: ASGIApp, proxy_scheme: str, proxy_host: str) -> None:
+        self.app = app
+        self.proxy_scheme = proxy_scheme
+        self.proxy_host = proxy_host
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Override scope values if proxy paramters are configured"""
+        if scope["type"] == "http":
+            if self.proxy_scheme:
+                scope["scheme"] = self.proxy_scheme
+
+            if self.proxy_host:
+                scope["server"] = (self.proxy_host, 0)
+                headers = MutableHeaders(scope=scope)
+                headers["host"] = self.proxy_host
+
+        return await self.app(scope, receive, send)
