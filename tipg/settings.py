@@ -3,6 +3,7 @@
 import json
 import pathlib
 from typing import Any, Dict, List, Optional
+from urllib.parse import quote_plus
 
 import boto3
 from pydantic import (
@@ -171,22 +172,26 @@ class PostgresSettings(BaseSettings):
                     "aws_region must be provided when IAM authentication is enabled"
                 )
             rds_client = boto3.client("rds", region_name=region)
-            password = rds_client.generate_db_auth_token(
+            token = rds_client.generate_db_auth_token(
                 DBHostname=host,
-                Port=port,
+                Port=int(port),
                 DBUsername=username,
+                Region=region,
             )
+            password = quote_plus(token)
         else:
             password = info.data["postgres_pass"]
 
-        return PostgresDsn.build(
+        db_url = PostgresDsn.build(
             scheme="postgresql",
             username=username,
             password=password,
             host=host,
             port=port,
-            path=dbname,  # ensure the dbname is prefixed with '/'
+            path=dbname,
         )
+
+        return db_url
 
 
 class DatabaseSettings(BaseSettings):
