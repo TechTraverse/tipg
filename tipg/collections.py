@@ -904,7 +904,7 @@ async def get_collection_index(  # noqa: C901
     """Fetch Table and Functions index."""
     schemas = schemas or ["public"]
 
-    read_only = os.getenv('TIPG_SKIP_SQL_EXECUTION')
+    read_only = os.getenv("TIPG_SKIP_SQL_EXECUTION")
 
     if read_only == "TRUE":
         query = """
@@ -936,7 +936,6 @@ async def get_collection_index(  # noqa: C901
                 :datetime_extent
             );
         """  # noqa: W605
-
 
     async with db_pool.acquire() as conn:
         rows = await conn.fetch_b(
