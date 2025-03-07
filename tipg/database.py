@@ -53,7 +53,7 @@ class connection_factory:
         if not self.skip_sql_execution:
             schemas = ",".join(["pg_temp", *self.schemas])
         if self.skip_sql_execution:
-            schemas = ["public", "pgstac"]
+            schemas = ",".join(["public", "pgstac"])
 
         logger.debug(f"Looking for Tables and Functions in {schemas} schemas")
 
