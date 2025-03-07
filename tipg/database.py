@@ -53,7 +53,7 @@ class connection_factory:
         if not self.skip_sql_execution:
             schemas = ",".join(["pg_temp", *self.schemas])
         if self.skip_sql_execution:
-            schemas = "".join([*self.schemas])
+            schemas = ",".join(["public", "pgstac"])
 
         logger.debug(f"Looking for Tables and Functions in {schemas} schemas")
 
@@ -87,8 +87,6 @@ async def connect_to_db(
     """Connect."""
     if not settings:
         settings = PostgresSettings()
-
-    print(schemas)
 
     con_init = connection_factory(schemas, user_sql_files, skip_sql_execution)
 
