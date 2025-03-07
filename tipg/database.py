@@ -88,8 +88,6 @@ async def connect_to_db(
     if not settings:
         settings = PostgresSettings()
 
-    print(schemas)
-
     con_init = connection_factory(schemas, user_sql_files, skip_sql_execution)
 
     app.state.pool = await asyncpg.create_pool_b(
