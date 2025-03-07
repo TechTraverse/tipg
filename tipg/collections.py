@@ -1,6 +1,7 @@
 """tipg.dbmodel: database events."""
 
 import datetime
+import os
 import re
 from typing import Any, Dict, List, Optional, Tuple, TypedDict, Union
 
@@ -903,20 +904,39 @@ async def get_collection_index(  # noqa: C901
     """Fetch Table and Functions index."""
     schemas = schemas or ["public"]
 
-    query = """
-        SELECT pg_temp.tipg_catalog(
-            :schemas,
-            :tables,
-            :exclude_tables,
-            :exclude_table_schemas,
-            :functions,
-            :exclude_functions,
-            :exclude_function_schemas,
-            :spatial,
-            :spatial_extent,
-            :datetime_extent
-        );
-    """  # noqa: W605
+    read_only = os.getenv('TIPG_SKIP_SQL_EXECUTION')
+
+    if read_only == "TRUE":
+        query = """
+            SELECT public.tipg_catalog(
+                :schemas,
+                :tables,
+                :exclude_tables,
+                :exclude_table_schemas,
+                :functions,
+                :exclude_functions,
+                :exclude_function_schemas,
+                :spatial,
+                :spatial_extent,
+                :datetime_extent
+            );
+        """  # noqa: W605
+    else:
+        query = """
+            SELECT pg_temp.tipg_catalog(
+                :schemas,
+                :tables,
+                :exclude_tables,
+                :exclude_table_schemas,
+                :functions,
+                :exclude_functions,
+                :exclude_function_schemas,
+                :spatial,
+                :spatial_extent,
+                :datetime_extent
+            );
+        """  # noqa: W605
+
 
     async with db_pool.acquire() as conn:
         rows = await conn.fetch_b(
