@@ -1,8 +1,11 @@
 """tipg.db: database events."""
 
+import functools
+import os
 import pathlib
 from typing import List, Optional
 
+import boto3
 import orjson
 from buildpg import asyncpg
 
@@ -18,6 +21,23 @@ except ImportError:
     from importlib_resources import files as resources_files  # type: ignore
 
 DB_CATALOG_FILE = resources_files(__package__) / "sql" / "dbcatalog.sql"
+
+
+def get_rds_token(
+    host: str | None, port: int | None, user: str | None, region: str | None
+) -> str:
+    """Get RDS token for IAM auth"""
+    logger.debug(
+        f"Retrieving RDS IAM token with host: {host}, port: {port}, user: {user}, region: {region}"
+    )
+    rds_client = boto3.client("rds")
+    token = rds_client.generate_db_auth_token(
+        DBHostname=host,
+        Port=port,
+        DBUsername=user,
+        Region=region or rds_client.meta.region_name,
+    )
+    return token
 
 
 class connection_factory:
@@ -89,6 +109,11 @@ async def connect_to_db(
         settings = PostgresSettings()
 
     con_init = connection_factory(schemas, user_sql_files, skip_sql_execution)
+
+    if os.environ.get("IAM_AUTH_ENABLED"):
+        kwargs["password"] = functools.partial(
+            get_rds_token, settings.host, settings.port, settings.user, settings.region
+        )
 
     app.state.pool = await asyncpg.create_pool_b(
         str(settings.database_url),

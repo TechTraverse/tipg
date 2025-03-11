@@ -3,14 +3,13 @@
 import json
 import pathlib
 from typing import Any, Dict, List, Optional
-from urllib.parse import quote_plus
 
-import boto3
 from pydantic import (
     BaseModel,
     DirectoryPath,
     Field,
     PostgresDsn,
+    ValidationInfo,
     field_validator,
     model_validator,
 )
@@ -154,44 +153,21 @@ class PostgresSettings(BaseSettings):
 
     # https://github.com/tiangolo/full-stack-fastapi-postgresql/blob/master/%7B%7Bcookiecutter.project_slug%7D%7D/backend/app/app/core/config.py#L42
     @field_validator("database_url", mode="before")
-    def assemble_db_connection(cls, v: Optional[str], info: Any) -> Any:
-        """Validate and assemble the database connection string."""
+    def assemble_db_connection(
+        cls, v: Optional[str], info: ValidationInfo
+    ) -> PostgresDsn:
+        """Validate db url settings."""
         if isinstance(v, str):
-            return v
+            return PostgresDsn(v)
 
-        username = info.data["postgres_user"]
-        host = info.data.get("postgres_host", "")
-        port = info.data.get("postgres_port", 5432)
-        dbname = info.data.get("postgres_dbname", "")
-
-        # Determine password/token based on IAM flag
-        if info.data.get("iam_auth_enabled"):
-            region = info.data.get("aws_region")
-            if not region:
-                raise ValueError(
-                    "aws_region must be provided when IAM authentication is enabled"
-                )
-            rds_client = boto3.client("rds", region_name=region)
-            token = rds_client.generate_db_auth_token(
-                DBHostname=host,
-                Port=int(port),
-                DBUsername=username,
-                Region=region,
-            )
-            password = quote_plus(token)
-        else:
-            password = info.data["postgres_pass"]
-
-        db_url = PostgresDsn.build(
+        return PostgresDsn.build(
             scheme="postgresql",
-            username=username,
-            password=password,
-            host=host,
-            port=port,
-            path=dbname,
+            username=info.data.get("postgres_user"),
+            password=info.data.get("postgres_pass"),
+            host=info.data.get("postgres_host", ""),
+            port=info.data.get("postgres_port", 5432),
+            path=info.data.get("postgres_dbname", ""),
         )
-
-        return db_url
 
 
 class DatabaseSettings(BaseSettings):

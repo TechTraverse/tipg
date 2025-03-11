@@ -962,7 +962,7 @@ async def get_collection_index(  # noqa: C901
             table_id = table["schema"] + "." + table["name"]
             confid = table["schema"] + "_" + table["name"]
 
-            if table_id == "pg_temp.tipg_catalog" or table_id == "public.tipg_catalog":
+            if "tipg_catalog" in table_id:
                 continue
 
             table_conf = table_confs.get(confid, TableConfig())
