@@ -116,7 +116,11 @@ async def connect_to_db(
     kwargs = {}
     if os.environ.get("IAM_AUTH_ENABLED") == "TRUE":
         kwargs["password"] = functools.partial(
-            get_rds_token, settings.postgres_host, settings.postgres_port, settings.postgres_user, settings.aws_region
+            get_rds_token,
+            settings.postgres_host,
+            settings.postgres_port,
+            settings.postgres_user,
+            settings.aws_region,
         )
         kwargs["ssl"] = "require"
 
