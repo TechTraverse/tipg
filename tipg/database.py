@@ -3,7 +3,7 @@
 import functools
 import os
 import pathlib
-from typing import List, Optional
+from typing import List, Optional, Union
 
 import boto3
 import orjson
@@ -24,7 +24,10 @@ DB_CATALOG_FILE = resources_files(__package__) / "sql" / "dbcatalog.sql"
 
 
 def get_rds_token(
-    host: str | None, port: int | None, user: str | None, region: str | None
+    host: Union[str, None],
+    port: Union[int, None],
+    user: Union[str, None],
+    region: Union[str, None],
 ) -> str:
     """Get RDS token for IAM auth"""
     logger.debug(
