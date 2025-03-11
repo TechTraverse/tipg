@@ -113,10 +113,16 @@ async def connect_to_db(
 
     con_init = connection_factory(schemas, user_sql_files, skip_sql_execution)
 
+    kwargs = {}
     if os.environ.get("IAM_AUTH_ENABLED") == "TRUE":
         kwargs["password"] = functools.partial(
-            get_rds_token, settings.host, settings.port, settings.user, settings.region
+            get_rds_token,
+            settings.postgres_host,
+            settings.postgres_port,
+            settings.postgres_user,
+            settings.aws_region,
         )
+        kwargs["ssl"] = "require"
 
     app.state.pool = await asyncpg.create_pool_b(
         str(settings.database_url),
