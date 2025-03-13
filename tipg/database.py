@@ -113,7 +113,6 @@ async def connect_to_db(
 
     con_init = connection_factory(schemas, user_sql_files, skip_sql_execution)
 
-    kwargs = {}
     if os.environ.get("IAM_AUTH_ENABLED") == "TRUE":
         kwargs["password"] = functools.partial(
             get_rds_token,
