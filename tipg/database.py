@@ -1,12 +1,9 @@
 """tipg.db: database events."""
 
-import functools
-import os
 import pathlib
 from importlib.resources import files as resources_files
-from typing import List, Optional, Union
+from typing import List, Optional
 
-import boto3
 import orjson
 from buildpg import asyncpg
 
@@ -16,26 +13,6 @@ from tipg.settings import PostgresSettings
 from fastapi import FastAPI
 
 DB_CATALOG_FILE = resources_files(__package__) / "sql" / "dbcatalog.sql"
-
-
-def get_rds_token(
-    host: Union[str, None],
-    port: Union[int, None],
-    user: Union[str, None],
-    region: Union[str, None],
-) -> str:
-    """Get RDS token for IAM auth"""
-    logger.debug(
-        f"Retrieving RDS IAM token with host: {host}, port: {port}, user: {user}, region: {region}"
-    )
-    rds_client = boto3.client("rds")
-    token = rds_client.generate_db_auth_token(
-        DBHostname=host,
-        Port=port,
-        DBUsername=user,
-        Region=region or rds_client.meta.region_name,
-    )
-    return token
 
 
 class connection_factory:
@@ -111,15 +88,7 @@ async def connect_to_db(
         schemas, tipg_schema, user_sql_files, skip_sql_execution
     )
 
-    if os.environ.get("IAM_AUTH_ENABLED") == "TRUE":
-        kwargs["password"] = functools.partial(
-            get_rds_token,
-            settings.postgres_host,
-            settings.postgres_port,
-            settings.postgres_user,
-            settings.aws_region,
-        )
-        kwargs["ssl"] = "require"
+    merged_pool_kwargs = {**settings.pool_kwargs, **(kwargs or {})}
 
     app.state.pool = await asyncpg.create_pool_b(
         str(settings.database_url),
@@ -128,7 +97,7 @@ async def connect_to_db(
         max_queries=settings.db_max_queries,
         max_inactive_connection_lifetime=settings.db_max_inactive_conn_lifetime,
         init=con_init,
-        **kwargs,
+        **merged_pool_kwargs,
     )
 
 
