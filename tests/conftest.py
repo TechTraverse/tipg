@@ -117,23 +117,12 @@ def create_tipg_app(
         """FastAPI Lifespan."""
         await connect_to_db(
             app,
-            settings=postgres_settings,
             schemas=db_settings.schemas,
+            tipg_schema=db_settings.tipg_schema,
             user_sql_files=sql_settings.sql_files,
+            settings=postgres_settings,
         )
-        await register_collection_catalog(
-            app,
-            schemas=db_settings.schemas,
-            tables=db_settings.tables,
-            exclude_tables=db_settings.exclude_tables,
-            exclude_table_schemas=db_settings.exclude_table_schemas,
-            functions=db_settings.functions,
-            exclude_functions=db_settings.exclude_functions,
-            exclude_function_schemas=db_settings.exclude_function_schemas,
-            spatial=db_settings.only_spatial_tables,
-            spatial_extent=db_settings.spatial_extent,
-            datetime_extent=db_settings.datetime_extent,
-        )
+        await register_collection_catalog(app, db_settings=db_settings)
         yield
         await close_db_connection(app)
 
@@ -177,9 +166,7 @@ def app(database_url, monkeypatch):
 
     monkeypatch.setenv("TIPG_DEBUG", "TRUE")
 
-    from tipg.main import app, db_settings, postgres_settings
-
-    postgres_settings.database_url = database_url
+    from tipg.main import app, db_settings
 
     db_settings.only_spatial_tables = False
     db_settings.exclude_tables = None
@@ -508,20 +495,11 @@ def app_middleware_refresh(database_url, monkeypatch):
         """FastAPI Lifespan."""
         await connect_to_db(
             app,
+            schemas=db_settings.schemas,
+            tipg_schema=db_settings.tipg_schema,
             settings=postgres_settings,
-            schemas=db_settings.schemas,
         )
-        await register_collection_catalog(
-            app,
-            schemas=db_settings.schemas,
-            tables=db_settings.tables,
-            exclude_tables=db_settings.exclude_tables,
-            exclude_table_schemas=db_settings.exclude_table_schemas,
-            functions=db_settings.functions,
-            exclude_functions=db_settings.exclude_functions,
-            exclude_function_schemas=db_settings.exclude_function_schemas,
-            spatial=db_settings.only_spatial_tables,
-        )
+        await register_collection_catalog(app, db_settings=db_settings)
         yield
         await close_db_connection(app)
 
@@ -537,14 +515,7 @@ def app_middleware_refresh(database_url, monkeypatch):
         CatalogUpdateMiddleware,
         func=register_collection_catalog,
         ttl=2,
-        schemas=db_settings.schemas,
-        tables=db_settings.tables,
-        exclude_tables=db_settings.exclude_tables,
-        exclude_table_schemas=db_settings.exclude_table_schemas,
-        functions=db_settings.functions,
-        exclude_functions=db_settings.exclude_functions,
-        exclude_function_schemas=db_settings.exclude_function_schemas,
-        spatial=db_settings.only_spatial_tables,
+        db_settings=db_settings,
     )
 
     with TestClient(app) as client:

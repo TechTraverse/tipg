@@ -12,7 +12,7 @@ from tipg.database import close_db_connection, connect_to_db
 from tipg.collections import register_collection_catalog
 from tipg.errors import DEFAULT_STATUS_CODES, add_exception_handlers
 from tipg.factory import OGCFeaturesFactory
-from tipg.settings import PostgresSettings
+from tipg.settings import PostgresSettings, DatabaseSettings
 
 from fastapi import FastAPI
 
@@ -28,10 +28,14 @@ async def lifespan(app: FastAPI):
     """
     await connect_to_db(
         app,
-        settings=PostgresSettings(database_url="postgres://...."),
         schemas=["public"],
+        tipg_schema="pg_temp",
+        settings=PostgresSettings(database_url="postgres://...."),
     )
-    await register_collection_catalog(app, schemas=["public"])
+    await register_collection_catalog(
+        app,
+        db_settings=DatabaseSettings(schemas=["public"], application_schema="pg_temp"),
+    )
 
     yield
 
@@ -94,7 +98,7 @@ To `register` custom SQL functions, user can set `TIPG_CUSTOM_SQL_DIRECTORY` env
 ```python
 from tipg.database import connect_to_db
 from tipg.collections import register_collection_catalog
-from tipg.settings import PostgresSettings
+from tipg.settings import PostgresSettings, DatabaseSettings
 
 postgres_settings = PostgresSettings()
 
@@ -111,8 +115,10 @@ async def startup_event() -> None:
     )
     await register_collection_catalog(
         app,
-        schemas=["public"],
-        exclude_function_schemas=["public"],
+        db_settings=DatabaseSettings(
+            schemas=["public"],
+            exclude_function_schemas=["public"],
+        ),
     )
 ```
 
@@ -128,3 +134,14 @@ pg_temp.hexagons
 pg_temp.squares
 pg_temp.landsat
 ```
+
+### Custom schema for `tipg` catalog method
+
+By default, when users start the `tipg` application, we will register some SQL function to the `pg_temp` schema. This schema might not always be available to the user deploying the application (e.g in AWS Aurora).
+
+Starting with `tipg>=0.12`, users can use environment variable `TIPG_DB_APPLICATION_SCHEMA` to change the schema where `tipg` will register the catalog function.
+
+!!! important
+
+    This schema must already exist, and the logged in user must have full permissions to the schema!).
+

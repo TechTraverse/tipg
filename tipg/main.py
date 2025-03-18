@@ -11,12 +11,7 @@ from tipg.database import close_db_connection, connect_to_db
 from tipg.errors import DEFAULT_STATUS_CODES, add_exception_handlers
 from tipg.factory import Endpoints
 from tipg.middleware import CacheControlMiddleware, CatalogUpdateMiddleware
-from tipg.settings import (
-    APISettings,
-    CustomSQLSettings,
-    DatabaseSettings,
-    PostgresSettings,
-)
+from tipg.settings import APISettings, CustomSQLSettings, DatabaseSettings
 
 from fastapi import FastAPI, Request
 
@@ -25,7 +20,6 @@ from starlette.templating import Jinja2Templates
 from starlette_cramjam.middleware import CompressionMiddleware
 
 settings = APISettings()
-postgres_settings = PostgresSettings()
 db_settings = DatabaseSettings()
 custom_sql_settings = CustomSQLSettings()
 
@@ -36,26 +30,14 @@ async def lifespan(app: FastAPI):
     # Create Connection Pool
     await connect_to_db(
         app,
-        settings=postgres_settings,
         schemas=db_settings.schemas,
+        tipg_schema=db_settings.tipg_schema,
         user_sql_files=custom_sql_settings.sql_files,
         skip_sql_execution=settings.skip_sql_execution,
     )
 
     # Register Collection Catalog
-    await register_collection_catalog(
-        app,
-        schemas=db_settings.schemas,
-        tables=db_settings.tables,
-        exclude_tables=db_settings.exclude_tables,
-        exclude_table_schemas=db_settings.exclude_table_schemas,
-        functions=db_settings.functions,
-        exclude_functions=db_settings.exclude_functions,
-        exclude_function_schemas=db_settings.exclude_function_schemas,
-        spatial=db_settings.only_spatial_tables,
-        spatial_extent=db_settings.spatial_extent,
-        datetime_extent=db_settings.datetime_extent,
-    )
+    await register_collection_catalog(app, db_settings=db_settings)
 
     yield
 
@@ -109,16 +91,7 @@ if settings.catalog_ttl:
         CatalogUpdateMiddleware,
         func=register_collection_catalog,
         ttl=settings.catalog_ttl,
-        schemas=db_settings.schemas,
-        tables=db_settings.tables,
-        exclude_tables=db_settings.exclude_tables,
-        exclude_table_schemas=db_settings.exclude_table_schemas,
-        functions=db_settings.functions,
-        exclude_functions=db_settings.exclude_functions,
-        exclude_function_schemas=db_settings.exclude_function_schemas,
-        spatial=db_settings.only_spatial_tables,
-        spatial_extent=db_settings.spatial_extent,
-        datetime_extent=db_settings.datetime_extent,
+        db_settings=db_settings,
     )
 
 add_exception_handlers(app, DEFAULT_STATUS_CODES)
@@ -148,15 +121,6 @@ if settings.debug:
         """Return parsed catalog data for testing."""
         await register_collection_catalog(
             request.app,
-            schemas=db_settings.schemas,
-            tables=db_settings.tables,
-            exclude_tables=db_settings.exclude_tables,
-            exclude_table_schemas=db_settings.exclude_table_schemas,
-            functions=db_settings.functions,
-            exclude_functions=db_settings.exclude_functions,
-            exclude_function_schemas=db_settings.exclude_function_schemas,
-            spatial=db_settings.only_spatial_tables,
-            spatial_extent=db_settings.spatial_extent,
-            datetime_extent=db_settings.datetime_extent,
+            db_settings=db_settings,
         )
         return request.app.state.collection_catalog

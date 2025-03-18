@@ -1,8 +1,10 @@
 """tipg.dbmodel: database events."""
 
+import abc
 import datetime
 import os
 import re
+from functools import lru_cache
 from typing import Any, Dict, List, Optional, Tuple, TypedDict, Union
 
 from buildpg import RawDangerous as raw
@@ -13,6 +15,7 @@ from ciso8601 import parse_rfc3339
 from morecantile import Tile, TileMatrixSet
 from pydantic import BaseModel, Field, model_validator
 from pygeofilter.ast import AstType
+from pyproj import Transformer
 
 from tipg.errors import (
     InvalidDatetime,
@@ -26,12 +29,22 @@ from tipg.filter.evaluate import to_filter
 from tipg.filter.filters import bbox_to_wkt
 from tipg.logger import logger
 from tipg.model import Extent
-from tipg.settings import FeaturesSettings, MVTSettings, TableConfig, TableSettings
+from tipg.settings import (
+    DatabaseSettings,
+    FeaturesSettings,
+    MVTSettings,
+    TableConfig,
+    TableSettings,
+)
 
 from fastapi import FastAPI
 
+from starlette.requests import Request
+
 mvt_settings = MVTSettings()
 features_settings = FeaturesSettings()
+
+TransformerFromCRS = lru_cache(Transformer.from_crs)
 
 
 def debug_query(q, *p):
@@ -155,13 +168,12 @@ class Parameter(Column):
     default: Optional[str] = None
 
 
-class Collection(BaseModel):
-    """Model for DB Table and Function."""
+class Collection(BaseModel, metaclass=abc.ABCMeta):
+    """Collection Base Class."""
 
     type: str
     id: str
     table: str
-    dbschema: str = Field(alias="schema")
     title: Optional[str] = None
     description: Optional[str] = None
     table_columns: List[Column] = []
@@ -294,6 +306,57 @@ class Collection(BaseModel):
                 return p
 
         return None
+
+    @property
+    def queryables(self) -> Dict:
+        """Return the queryables."""
+        if self.geometry_columns:
+            geoms = {
+                col.name: {"$ref": geojson_schema.get(col.geometry_type.upper(), "")}
+                for col in self.geometry_columns
+            }
+        else:
+            geoms = {}
+
+        props = {
+            col.name: {"name": col.name, "type": col.json_type}
+            for col in self.properties
+            if col.name not in geoms
+        }
+
+        return {**geoms, **props}
+
+    @abc.abstractmethod
+    async def features(self, request: Request, *args, **kwargs) -> ItemList:
+        """Get Items."""
+        ...
+
+    @abc.abstractmethod
+    async def get_tile(self, request: Request, *args, **kwargs) -> bytes:
+        """Get MVT Tile."""
+        ...
+
+
+class CollectionList(TypedDict):
+    """Collections."""
+
+    collections: List[Collection]
+    matched: Optional[int]
+    next: Optional[int]
+    prev: Optional[int]
+
+
+class Catalog(TypedDict):
+    """Internal Collection Catalog."""
+
+    collections: Dict[str, Collection]
+    last_updated: datetime.datetime
+
+
+class PgCollection(Collection):
+    """Model for DB Table and Function."""
+
+    dbschema: str = Field(alias="schema")
 
     def _select_no_geo(self, properties: Optional[List[str]], addid: bool = True):
         nocomma = False
@@ -533,31 +596,36 @@ class Collection(BaseModel):
             wheres.append(to_filter(cql, [p.name for p in self.properties]))
 
         if tile and tms and geometry_column:
-            # Get Tile Bounds in Geographic CRS (usually epsg:4326)
-            left, bottom, right, top = tms.bounds(tile)
+            # Get tile bounds in the TMS coordinate system
+            bbox = tms.xy_bounds(tile)
+            left, bottom, right, top = bbox
 
-            # Truncate bounds to the max TMS bbox
-            left, bottom = tms.truncate_lnglat(left, bottom)
-            right, top = tms.truncate_lnglat(right, top)
+            # If the geometry column’s SRID does not match the TMS CRS, transform the bounds:
+            # Use a fallback of 4326 if tms.crs.to_epsg() returns a falsey value.
+            tms_epsg = tms.crs.to_epsg() or 4326
+            if geometry_column.srid != tms_epsg:
+                transformer = TransformerFromCRS(
+                    tms_epsg, geometry_column.srid, always_xy=True
+                )
+
+                left, bottom, right, top = transformer.transform_bounds(
+                    left, bottom, right, top
+                )
 
             wheres.append(
                 logic.Func(
                     "ST_Intersects",
                     logic.Func(
-                        "ST_Transform",
+                        "ST_Segmentize",
                         logic.Func(
-                            "ST_Segmentize",
-                            logic.Func(
-                                "ST_MakeEnvelope",
-                                left,
-                                bottom,
-                                right,
-                                top,
-                                4326,
-                            ),
-                            right - left,
+                            "ST_MakeEnvelope",
+                            left,
+                            bottom,
+                            right,
+                            top,
+                            geometry_column.srid,
                         ),
-                        pg_funcs.cast(geometry_column.srid, "int"),
+                        right - left,
                     ),
                     logic.V(geometry_column.name),
                 )
@@ -623,8 +691,8 @@ class Collection(BaseModel):
 
     async def _features_query(
         self,
+        conn: asyncpg.Connection,
         *,
-        pool: asyncpg.BuildPgPool,
         ids_filter: Optional[List[str]] = None,
         bbox_filter: Optional[List[float]] = None,
         datetime_filter: Optional[List[str]] = None,
@@ -669,18 +737,17 @@ class Collection(BaseModel):
         )
 
         q, p = render(":c", c=c)
-        async with pool.acquire() as conn:
-            for r in await conn.fetch(q, *p):
-                props = dict(r)
-                g = props.pop("tipg_geom")
-                id = props.pop("tipg_id")
-                feature = Feature(type="Feature", geometry=g, id=id, properties=props)
-                yield feature
+        for r in await conn.fetch(q, *p):
+            props = dict(r)
+            g = props.pop("tipg_geom")
+            id = props.pop("tipg_id")
+            feature = Feature(type="Feature", geometry=g, id=id, properties=props)
+            yield feature
 
     async def _features_count_query(
         self,
+        conn: asyncpg.Connection,
         *,
-        pool: asyncpg.BuildPgPool,
         ids_filter: Optional[List[str]] = None,
         bbox_filter: Optional[List[float]] = None,
         datetime_filter: Optional[List[str]] = None,
@@ -706,13 +773,12 @@ class Collection(BaseModel):
         )
 
         q, p = render(":c", c=c)
-        async with pool.acquire() as conn:
-            count = await conn.fetchval(q, *p)
-            return count
+        count = await conn.fetchval(q, *p)
+        return count
 
     async def features(
         self,
-        pool: asyncpg.BuildPgPool,
+        request: Request,
         *,
         ids_filter: Optional[List[str]] = None,
         bbox_filter: Optional[List[float]] = None,
@@ -744,40 +810,41 @@ class Collection(BaseModel):
                 f"Limit can not be set higher than the `tipg_max_features_per_query` setting of {features_settings.max_features_per_query}"
             )
 
-        matched = await self._features_count_query(
-            pool=pool,
-            ids_filter=ids_filter,
-            datetime_filter=datetime_filter,
-            bbox_filter=bbox_filter,
-            properties_filter=properties_filter,
-            function_parameters=function_parameters,
-            cql_filter=cql_filter,
-            geom=geom,
-            dt=dt,
-        )
-
-        features = [
-            f
-            async for f in self._features_query(
-                pool=pool,
+        async with request.app.state.pool.acquire() as conn:
+            matched = await self._features_count_query(
+                conn,
                 ids_filter=ids_filter,
                 datetime_filter=datetime_filter,
                 bbox_filter=bbox_filter,
                 properties_filter=properties_filter,
+                function_parameters=function_parameters,
                 cql_filter=cql_filter,
-                sortby=sortby,
-                properties=properties,
                 geom=geom,
                 dt=dt,
-                limit=limit,
-                offset=offset,
-                bbox_only=bbox_only,
-                simplify=simplify,
-                geom_as_wkt=geom_as_wkt,
-                function_parameters=function_parameters,
             )
-        ]
-        returned = len(features)
+
+            features = [
+                f
+                async for f in self._features_query(
+                    conn,
+                    ids_filter=ids_filter,
+                    datetime_filter=datetime_filter,
+                    bbox_filter=bbox_filter,
+                    properties_filter=properties_filter,
+                    cql_filter=cql_filter,
+                    sortby=sortby,
+                    properties=properties,
+                    geom=geom,
+                    dt=dt,
+                    limit=limit,
+                    offset=offset,
+                    bbox_only=bbox_only,
+                    simplify=simplify,
+                    geom_as_wkt=geom_as_wkt,
+                    function_parameters=function_parameters,
+                )
+            ]
+            returned = len(features)
 
         return ItemList(
             items=features,
@@ -788,8 +855,8 @@ class Collection(BaseModel):
 
     async def get_tile(
         self,
+        request: Request,
         *,
-        pool: asyncpg.BuildPgPool,
         tms: TileMatrixSet,
         tile: Tile,
         ids_filter: Optional[List[str]] = None,
@@ -849,110 +916,53 @@ class Collection(BaseModel):
         )
         debug_query(q, *p)
 
-        async with pool.acquire() as conn:
-            return await conn.fetchval(q, *p)
+        async with request.app.state.pool.acquire() as conn:
+            tile = await conn.fetchval(q, *p)
 
-    @property
-    def queryables(self) -> Dict:
-        """Return the queryables."""
-        if self.geometry_columns:
-            geoms = {
-                col.name: {"$ref": geojson_schema.get(col.geometry_type.upper(), "")}
-                for col in self.geometry_columns
-            }
-        else:
-            geoms = {}
-
-        props = {
-            col.name: {"name": col.name, "type": col.json_type}
-            for col in self.properties
-            if col.name not in geoms
-        }
-
-        return {**geoms, **props}
+        return bytes(tile)
 
 
-class CollectionList(TypedDict):
-    """Collections."""
-
-    collections: List[Collection]
-    matched: Optional[int]
-    next: Optional[int]
-    prev: Optional[int]
-
-
-class Catalog(TypedDict):
-    """Internal Collection Catalog."""
-
-    collections: Dict[str, Collection]
-    last_updated: datetime.datetime
-
-
-async def get_collection_index(  # noqa: C901
+async def pg_get_collection_index(  # noqa: C901
     db_pool: asyncpg.BuildPgPool,
-    schemas: Optional[List[str]] = None,
-    tables: Optional[List[str]] = None,
-    exclude_tables: Optional[List[str]] = None,
-    exclude_table_schemas: Optional[List[str]] = None,
-    functions: Optional[List[str]] = None,
-    exclude_functions: Optional[List[str]] = None,
-    exclude_function_schemas: Optional[List[str]] = None,
-    spatial: bool = True,
-    spatial_extent: bool = True,
-    datetime_extent: bool = True,
-) -> Catalog:
+    settings: Optional[DatabaseSettings] = None,
+) -> List[Collection]:
     """Fetch Table and Functions index."""
-    schemas = schemas or ["public"]
+    if not settings:
+        settings = DatabaseSettings()
 
-    read_only = os.getenv("TIPG_SKIP_SQL_EXECUTION")
+    schemas = settings.schemas or ["public"]
 
-    if read_only == "TRUE":
-        query = """
-            SELECT public.tipg_catalog(
-                :schemas,
-                :tables,
-                :exclude_tables,
-                :exclude_table_schemas,
-                :functions,
-                :exclude_functions,
-                :exclude_function_schemas,
-                :spatial,
-                :spatial_extent,
-                :datetime_extent
-            );
-        """  # noqa: W605
-    else:
-        query = """
-            SELECT pg_temp.tipg_catalog(
-                :schemas,
-                :tables,
-                :exclude_tables,
-                :exclude_table_schemas,
-                :functions,
-                :exclude_functions,
-                :exclude_function_schemas,
-                :spatial,
-                :spatial_extent,
-                :datetime_extent
-            );
-        """  # noqa: W605
+    query = f"""
+        SELECT {settings.tipg_schema}.tipg_catalog(
+            :schemas,
+            :tables,
+            :exclude_tables,
+            :exclude_table_schemas,
+            :functions,
+            :exclude_functions,
+            :exclude_function_schemas,
+            :spatial,
+            :spatial_extent,
+            :datetime_extent
+        );
+    """  # noqa: W605
 
     async with db_pool.acquire() as conn:
         rows = await conn.fetch_b(
             query,
             schemas=schemas,
-            tables=tables,
-            exclude_tables=exclude_tables,
-            exclude_table_schemas=exclude_table_schemas,
-            functions=functions,
-            exclude_functions=exclude_functions,
-            exclude_function_schemas=exclude_function_schemas,
-            spatial=spatial,
-            spatial_extent=spatial_extent,
-            datetime_extent=datetime_extent,
+            tables=settings.tables,
+            exclude_tables=settings.exclude_tables,
+            exclude_table_schemas=settings.exclude_table_schemas,
+            functions=settings.functions,
+            exclude_functions=settings.exclude_functions,
+            exclude_function_schemas=settings.exclude_function_schemas,
+            spatial=settings.only_spatial_tables,
+            spatial_extent=settings.spatial_extent,
+            datetime_extent=settings.datetime_extent,
         )
 
-        catalog: Dict[str, Collection] = {}
+        collections: List[Collection] = []
         table_settings = TableSettings()
         table_confs = table_settings.table_config
         fallback_key_names = table_settings.fallback_key_names
@@ -962,7 +972,7 @@ async def get_collection_index(  # noqa: C901
             table_id = table["schema"] + "." + table["name"]
             confid = table["schema"] + "_" + table["name"]
 
-            if "tipg_catalog" in table_id:
+            if table_id == f"{settings.tipg_schema}.tipg_catalog":
                 continue
 
             table_conf = table_confs.get(confid, TableConfig())
@@ -1000,23 +1010,33 @@ async def get_collection_index(  # noqa: C901
                     if table_conf.geomcol == c["name"] or geometry_column is None:
                         geometry_column = c
 
-            catalog[table_id] = Collection(
-                type=table["entity"],
-                id=table_id,
-                table=table["name"],
-                schema=table["schema"],
-                description=table.get("description", None),
-                table_columns=columns,
-                properties=[p for p in columns if p["name"] in properties_setting],
-                id_column=id_column,
-                datetime_column=datetime_column,
-                geometry_column=geometry_column,
-                parameters=table.get("parameters") or [],
+            collections.append(
+                PgCollection(
+                    type=table["entity"],
+                    id=table_id,
+                    table=table["name"],
+                    schema=table["schema"],
+                    description=table.get("description", None),
+                    table_columns=columns,
+                    properties=[p for p in columns if p["name"] in properties_setting],
+                    id_column=id_column,
+                    datetime_column=datetime_column,
+                    geometry_column=geometry_column,
+                    parameters=table.get("parameters") or [],
+                )
             )
 
-        return Catalog(collections=catalog, last_updated=datetime.datetime.now())
+        return collections
 
 
-async def register_collection_catalog(app: FastAPI, **kwargs: Any) -> None:
+async def register_collection_catalog(
+    app: FastAPI,
+    db_settings: Optional[DatabaseSettings] = None,
+) -> None:
     """Register Table catalog."""
-    app.state.collection_catalog = await get_collection_index(app.state.pool, **kwargs)
+    db_collections = await pg_get_collection_index(app.state.pool, settings=db_settings)
+
+    app.state.collection_catalog = Catalog(
+        collections={col.id: col for col in [*db_collections]},
+        last_updated=datetime.datetime.now(),
+    )

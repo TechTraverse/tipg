@@ -3,6 +3,7 @@
 import functools
 import os
 import pathlib
+from importlib.resources import files as resources_files
 from typing import List, Optional, Union
 
 import boto3
@@ -13,12 +14,6 @@ from tipg.logger import logger
 from tipg.settings import PostgresSettings
 
 from fastapi import FastAPI
-
-try:
-    from importlib.resources import files as resources_files  # type: ignore
-except ImportError:
-    # Try backported to PY<39 `importlib_resources`.
-    from importlib_resources import files as resources_files  # type: ignore
 
 DB_CATALOG_FILE = resources_files(__package__) / "sql" / "dbcatalog.sql"
 
@@ -47,17 +42,20 @@ class connection_factory:
     """Connection creation."""
 
     schemas: List[str]
+    tipg_schema: str
     user_sql_files: List[pathlib.Path]
     skip_sql_execution: bool
 
     def __init__(
         self,
-        schemas: Optional[List[str]] = None,
+        schemas: List[str],
+        tipg_schema: str,
         user_sql_files: Optional[List[pathlib.Path]] = None,
         skip_sql_execution: Optional[bool] = False,
     ) -> None:
         """Init."""
-        self.schemas = schemas or []
+        self.schemas = schemas
+        self.tipg_schema = tipg_schema
         self.user_sql_files = user_sql_files or []
         self.skip_sql_execution = skip_sql_execution or False
 
@@ -70,14 +68,9 @@ class connection_factory:
             "jsonb", encoder=orjson.dumps, decoder=orjson.loads, schema="pg_catalog"
         )
 
-        # Note: Unless we are skipping all sql execution, e.g. to connect with a read
-        # replica, we add `pg_temp`` as the first element of the schemas list to make
-        # sure we register the custom functions and `dbcatalog` in it.
-        if not self.skip_sql_execution:
-            schemas = ",".join(["pg_temp", *self.schemas])
-        if self.skip_sql_execution:
-            schemas = ",".join(["public", "pgstac"])
-
+        # Note: we add `{tipg_schema}` as the first element of the schemas list to make sure
+        # we register the custom functions and `dbcatalog` in it.
+        schemas = ",".join([self.tipg_schema, *self.schemas])
         logger.debug(f"Looking for Tables and Functions in {schemas} schemas")
 
         await conn.execute(
@@ -90,24 +83,29 @@ class connection_factory:
             """
         )
 
-        if not self.skip_sql_execution:
-            # Register custom SQL functions/table/views in pg_temp
-            for sqlfile in self.user_sql_files:
-                await conn.execute(sqlfile.read_text())
+        # Register custom SQL functions/table/views in `{tipg_schema}`
+        for sqlfile in self.user_sql_files:
+            await conn.execute(sqlfile.read_text())
 
-            # Register TiPG functions in `pg_temp`
-            await conn.execute(DB_CATALOG_FILE.read_text())
+        # Register TiPG functions in `{tipg_schema}`
+        await conn.execute(
+            DB_CATALOG_FILE.read_text().replace("pg_temp", self.tipg_schema)
+        )
 
 
 async def connect_to_db(
     app: FastAPI,
-    settings: Optional[PostgresSettings] = None,
-    schemas: Optional[List[str]] = None,
+    *,
+    schemas: List[str],
+    tipg_schema: str = "pg_temp",
     user_sql_files: Optional[List[pathlib.Path]] = None,
     skip_sql_execution: Optional[bool] = False,
+    settings: Optional[PostgresSettings] = None,
     **kwargs,
 ) -> None:
     """Connect."""
+    con_init = connection_factory(schemas, tipg_schema, user_sql_files)
+
     if not settings:
         settings = PostgresSettings()
 
