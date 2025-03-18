@@ -97,7 +97,7 @@ async def connect_to_db(
         max_queries=settings.db_max_queries,
         max_inactive_connection_lifetime=settings.db_max_inactive_conn_lifetime,
         init=con_init,
-        kwargs=merged_pool_kwargs,
+        **merged_pool_kwargs,
     )
 
 
