@@ -104,8 +104,6 @@ async def connect_to_db(
     **kwargs,
 ) -> None:
     """Connect."""
-    con_init = connection_factory(schemas, tipg_schema, user_sql_files)
-
     if not settings:
         settings = PostgresSettings()
 
