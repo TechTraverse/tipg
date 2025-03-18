@@ -1,10 +1,10 @@
 """tipg config."""
 
-import boto3
 import json
 import pathlib
 from typing import Any, Dict, List, Optional
 
+import boto3
 from pydantic import (
     BaseModel,
     DirectoryPath,
@@ -162,7 +162,7 @@ class PostgresSettings(BaseSettings):
             Region=self.aws_region or rds_client.meta.region_name,
         )
         return token
-    
+
     @property
     def pool_kwargs(self) -> Dict[str, Any]:
         """
@@ -171,7 +171,7 @@ class PostgresSettings(BaseSettings):
         If IAM auth is enabled, use a dynamic password callable (bound to get_rds_token).
         Otherwise, use a static password if provided.
         """
-        kwargs: Dict[str, Any]
+        kwargs: Dict[str, Any] = {}
         if self.iam_auth_enabled:
             kwargs["password"] = self.get_rds_token
             kwargs["ssl"] = "require"
