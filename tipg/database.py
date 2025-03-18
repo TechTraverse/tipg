@@ -109,7 +109,9 @@ async def connect_to_db(
     if not settings:
         settings = PostgresSettings()
 
-    con_init = connection_factory(schemas, user_sql_files, skip_sql_execution)
+    con_init = connection_factory(
+        schemas, tipg_schema, user_sql_files, skip_sql_execution
+    )
 
     if os.environ.get("IAM_AUTH_ENABLED") == "TRUE":
         kwargs["password"] = functools.partial(
