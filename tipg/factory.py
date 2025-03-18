@@ -4,7 +4,17 @@ import abc
 import csv
 import re
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Generator, Iterable, List, Literal, Optional
+from typing import (
+    Annotated,
+    Any,
+    Callable,
+    Dict,
+    Generator,
+    Iterable,
+    List,
+    Literal,
+    Optional,
+)
 from urllib.parse import urlencode
 
 import jinja2
@@ -13,7 +23,6 @@ from morecantile import Tile, TileMatrixSet
 from morecantile import tms as default_tms
 from morecantile.defaults import TileMatrixSets
 from pygeofilter.ast import AstType
-from typing_extensions import Annotated
 
 from tipg import model
 from tipg.collections import Collection, CollectionList
@@ -44,7 +53,7 @@ from fastapi.responses import ORJSONResponse
 from starlette.datastructures import QueryParams
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, Response, StreamingResponse
-from starlette.routing import compile_path, replace_params
+from starlette.routing import NoMatchFound, compile_path, replace_params
 from starlette.templating import Jinja2Templates, _TemplateResponse
 
 tms_settings = TMSSettings()
@@ -121,7 +130,7 @@ def create_html_response(
 ) -> _TemplateResponse:
     """Create Template response."""
     urlpath = request.url.path
-    if root_path := request.app.root_path:
+    if root_path := request.scope.get("root_path"):
         urlpath = re.sub(r"^" + root_path, "", urlpath)
 
     if router_prefix:
@@ -407,6 +416,65 @@ class OGCFeaturesFactory(EndpointsFactory):
             ),
         ]
 
+    def _additional_collection_tiles_links(
+        self, request: Request, collection: Collection
+    ) -> List[model.Link]:
+        links = []
+        base_url = str(request.base_url)
+        try:
+            links.append(
+                model.Link(
+                    rel="data",
+                    title="Collection TileSets",
+                    type=MediaType.json,
+                    href=str(
+                        request.app.url_path_for(
+                            "collection_tileset_list",
+                            collectionId=collection.id,
+                        ).make_absolute_url(base_url=base_url)
+                    ),
+                ),
+            )
+            links.append(
+                model.Link(
+                    rel="data",
+                    title="Collection TileSet (Template URL)",
+                    type=MediaType.json,
+                    templated=True,
+                    href=str(
+                        request.app.url_path_for(
+                            "collection_tileset",
+                            collectionId=collection.id,
+                            tileMatrixSetId="{tileMatrixSetId}",
+                        ).make_absolute_url(base_url=base_url)
+                    ),
+                ),
+            )
+        except NoMatchFound:
+            pass
+
+        try:
+            links.append(
+                model.Link(
+                    title="Collection Map viewer (Template URL)",
+                    href=str(
+                        request.app.url_path_for(
+                            "viewer_endpoint",
+                            collectionId=collection.id,
+                            tileMatrixSetId="{tileMatrixSetId}",
+                        ).make_absolute_url(base_url=base_url)
+                    ),
+                    type=MediaType.html,
+                    rel="data",
+                    templated=True,
+                )
+            )
+
+        except NoMatchFound:
+            pass
+
+        return links
+
     def register_routes(self):
         """Register OGC Features endpoints."""
         self._collections_route()
@@ -521,6 +589,9 @@ class OGCFeaturesFactory(EndpointsFactory):
                                 rel="queryables",
                                 type=MediaType.schemajson,
                             ),
+                            *self._additional_collection_tiles_links(
+                                request, collection
+                            ),
                         ],
                     )
                     for collection in collection_list["collections"]
@@ -559,60 +630,65 @@ class OGCFeaturesFactory(EndpointsFactory):
             output_type: Annotated[Optional[MediaType], Depends(OutputType)] = None,
         ):
             """Metadata for a feature collection."""
-
-            data = model.Collection.model_validate(
-                {
-                    **collection.model_dump(),
-                    "title": collection.id,
-                    "extent": collection.extent,
-                    "links": [
-                        {
-                            "href": self.url_for(
-                                request,
-                                "collection",
-                                collectionId=collection.id,
-                            ),
-                            "rel": "self",
-                            "type": "application/json",
-                        },
-                        {
-                            "title": "Items",
-                            "href": self.url_for(
-                                request, "items", collectionId=collection.id
-                            ),
-                            "rel": "items",
-                            "type": "application/geo+json",
-                        },
-                        {
-                            "title": "Items (CSV)",
-                            "href": self.url_for(
-                                request, "items", collectionId=collection.id
-                            )
-                            + "?f=csv",
-                            "rel": "alternate",
-                            "type": "text/csv",
-                        },
-                        {
-                            "title": "Items (GeoJSONSeq)",
-                            "href": self.url_for(
-                                request, "items", collectionId=collection.id
-                            )
-                            + "?f=geojsonseq",
-                            "rel": "alternate",
-                            "type": "application/geo+json-seq",
-                        },
-                        {
-                            "title": "Queryables",
-                            "href": self.url_for(
-                                request,
-                                "queryables",
-                                collectionId=collection.id,
-                            ),
-                            "rel": "queryables",
-                            "type": "application/schema+json",
-                        },
-                    ],
-                }
+            data = model.Collection(
+                id=collection.id,
+                title=collection.title,
+                description=collection.description,
+                extent=collection.extent,
+                links=[
+                    model.Link(
+                        title="Collection",
+                        href=self.url_for(
+                            request,
+                            "collection",
+                            collectionId=collection.id,
+                        ),
+                        rel="self",
+                        type=MediaType.json,
+                    ),
+                    model.Link(
+                        title="Items",
+                        href=self.url_for(
+                            request,
+                            "items",
+                            collectionId=collection.id,
+                        ),
+                        rel="items",
+                        type=MediaType.geojson,
+                    ),
+                    model.Link(
+                        title="Items (CSV)",
+                        href=self.url_for(
+                            request,
+                            "items",
+                            collectionId=collection.id,
+                        )
+                        + "?f=csv",
+                        rel="alternate",
+                        type=MediaType.csv,
+                    ),
+                    model.Link(
+                        title="Items (GeoJSONSeq)",
+                        href=self.url_for(
+                            request,
+                            "items",
+                            collectionId=collection.id,
+                        )
+                        + "?f=geojsonseq",
+                        rel="alternate",
+                        type=MediaType.geojsonseq,
+                    ),
+                    model.Link(
+                        href=self.url_for(
+                            request,
+                            "queryables",
+                            collectionId=collection.id,
+                        ),
+                        rel="queryables",
+                        type=MediaType.schemajson,
+                    ),
+                    *self._additional_collection_tiles_links(request, collection),
+                ],
             )
 
             if output_type == MediaType.html:
@@ -753,7 +829,7 @@ class OGCFeaturesFactory(EndpointsFactory):
             ]
 
             item_list = await collection.features(
-                request.app.state.pool,
+                request,
                 ids_filter=ids_filter,
                 bbox_filter=bbox_filter,
                 datetime_filter=datetime_filter,
@@ -1003,7 +1079,7 @@ class OGCFeaturesFactory(EndpointsFactory):
             ]
 
             item_list = await collection.features(
-                pool=request.app.state.pool,
+                request,
                 bbox_only=bbox_only,
                 simplify=simplify,
                 ids_filter=[itemId],
@@ -1116,6 +1192,7 @@ class OGCTilesFactory(EndpointsFactory):
                     request,
                     "collection_get_tile",
                     collectionId="{collectionId}",
+                    tileMatrixSetId="{tileMatrixSetId}",
                     z="{z}",
                     x="{x}",
                     y="{y}",
@@ -1530,22 +1607,16 @@ class OGCTilesFactory(EndpointsFactory):
             operation_id=".collection.vector.getTileTms",
             tags=["OGC Tiles API"],
         )
-        @self.router.get(
-            "/collections/{collectionId}/tiles/{z}/{x}/{y}",
-            response_class=Response,
-            responses={200: {"content": {MediaType.mvt.value: {}}}},
-            operation_id=".collection.vector.getTile",
-            tags=["OGC Tiles API"],
-            deprecated=True,
-        )
         async def collection_get_tile(
             request: Request,
             collection: Annotated[Collection, Depends(self.collection_dependency)],
-            tile: Annotated[Tile, Depends(TileParams)],
             tileMatrixSetId: Annotated[
                 Literal[tuple(self.supported_tms.list())],
-                f"Identifier selecting one of the TileMatrixSetId supported (default: '{tms_settings.default_tms}')",
-            ] = tms_settings.default_tms,
+                Path(
+                    description="Identifier selecting one of the TileMatrixSetId supported."
+                ),
+            ],
+            tile: Annotated[Tile, Depends(TileParams)],
             ids_filter: Annotated[Optional[List[str]], Depends(ids_query)] = None,
             bbox_filter: Annotated[Optional[List[float]], Depends(bbox_query)] = None,
             datetime_filter: Annotated[
@@ -1581,7 +1652,7 @@ class OGCTilesFactory(EndpointsFactory):
             tms = self.supported_tms.get(tileMatrixSetId)
 
             tile = await collection.get_tile(
-                pool=request.app.state.pool,
+                request,
                 tms=tms,
                 tile=tile,
                 ids_filter=ids_filter,
@@ -1597,14 +1668,14 @@ class OGCTilesFactory(EndpointsFactory):
                 dt=datetime_column,
             )
 
-            return Response(bytes(tile), media_type=MediaType.mvt.value)
+            return Response(tile, media_type=MediaType.mvt.value)
 
     def _tilejson_routes(self):
         ############################################################################
         # ADDITIONAL ENDPOINTS NOT IN OGC Tiles API (tilejson, style.json, viewer) #
         ############################################################################
         @self.router.get(
-            "/collections/{collectionId}/{tileMatrixSetId}/tilejson.json",
+            "/collections/{collectionId}/tiles/{tileMatrixSetId}/tilejson.json",
             response_model=model.TileJSON,
             responses={200: {"description": "Return a tilejson"}},
             response_model_exclude_none=True,
@@ -1612,23 +1683,15 @@ class OGCTilesFactory(EndpointsFactory):
             operation_id=".collection.vector.getTileJSONTms",
             tags=["OGC Tiles API"],
         )
-        @self.router.get(
-            "/collections/{collectionId}/tilejson.json",
-            response_model=model.TileJSON,
-            responses={200: {"description": "Return a tilejson"}},
-            response_model_exclude_none=True,
-            response_class=ORJSONResponse,
-            operation_id=".collection.vector.getTileJSON",
-            tags=["OGC Tiles API"],
-            deprecated=True,
-        )
         async def collection_tilejson(
             request: Request,
             collection: Annotated[Collection, Depends(self.collection_dependency)],
             tileMatrixSetId: Annotated[
                 Literal[tuple(self.supported_tms.list())],
-                f"Identifier selecting one of the TileMatrixSetId supported (default: '{tms_settings.default_tms}')",
-            ] = tms_settings.default_tms,
+                Path(
+                    description="Identifier selecting one of the TileMatrixSetId supported."
+                ),
+            ],
             minzoom: Annotated[
                 Optional[int],
                 Query(description="Overwrite default minzoom."),
@@ -1706,7 +1769,7 @@ class OGCTilesFactory(EndpointsFactory):
 
     def _stylejson_routes(self):
         @self.router.get(
-            "/collections/{collectionId}/{tileMatrixSetId}/style.json",
+            "/collections/{collectionId}/tiles/{tileMatrixSetId}/style.json",
             response_model=model.StyleJSON,
             responses={200: {"description": "Return a tilejson"}},
             response_model_exclude_none=True,
@@ -1714,23 +1777,15 @@ class OGCTilesFactory(EndpointsFactory):
             operation_id=".collection.vector.getStyleJSONTms",
             tags=["OGC Tiles API"],
         )
-        @self.router.get(
-            "/collections/{collectionId}/style.json",
-            response_model=model.StyleJSON,
-            responses={200: {"description": "Return a StyleJSON"}},
-            response_model_exclude_none=True,
-            response_class=ORJSONResponse,
-            operation_id=".collection.vector.getStyleJSON",
-            tags=["OGC Tiles API"],
-            deprecated=True,
-        )
         async def collection_stylejson(
             request: Request,
             collection: Annotated[Collection, Depends(self.collection_dependency)],
             tileMatrixSetId: Annotated[
                 Literal[tuple(self.supported_tms.list())],
-                f"Identifier selecting one of the TileMatrixSetId supported (default: '{tms_settings.default_tms}')",
-            ] = tms_settings.default_tms,
+                Path(
+                    description="Identifier selecting one of the TileMatrixSetId supported."
+                ),
+            ],
             geom_column: Annotated[
                 Optional[str],
                 Query(
@@ -1846,20 +1901,6 @@ class OGCTilesFactory(EndpointsFactory):
         if self.with_viewer:
 
             @self.router.get(
-                "/collections/{collectionId}/{tileMatrixSetId}/viewer",
-                response_class=HTMLResponse,
-                operation_id=".collection.vector.viewerTms",
-                deprecated=True,
-                tags=["Map Viewer"],
-            )
-            @self.router.get(
-                "/collections/{collectionId}/viewer",
-                response_class=HTMLResponse,
-                operation_id=".collection.vector.viewer",
-                deprecated=True,
-                tags=["Map Viewer"],
-            )
-            @self.router.get(
                 "/collections/{collectionId}/tiles/{tileMatrixSetId}/viewer",
                 response_class=HTMLResponse,
                 operation_id=".collection.vector.map",
@@ -1870,8 +1911,10 @@ class OGCTilesFactory(EndpointsFactory):
                 collection: Annotated[Collection, Depends(self.collection_dependency)],
                 tileMatrixSetId: Annotated[
                     Literal[tuple(self.supported_tms.list())],
-                    f"Identifier selecting one of the TileMatrixSetId supported (default: '{tms_settings.default_tms}')",
-                ] = tms_settings.default_tms,
+                    Path(
+                        description="Identifier selecting one of the TileMatrixSetId supported."
+                    ),
+                ],
                 minzoom: Annotated[
                     Optional[int],
                     Query(description="Overwrite default minzoom."),

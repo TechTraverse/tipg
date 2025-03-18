@@ -8,6 +8,75 @@ Note: Minor version `0.X.0` update might break the API, It's recommended to pin 
 
 ## [unreleased]
 
+## [1.0.1] - 2025-03-17
+
+* fix typo when using catalog_ttl
+
+## [1.0.0] - 2025-03-07
+
+### Added
+
+* add `tilesets` and `viewer` links in `/collections` and `/collections/{collectionId}` response links
+* add the ability to use a schema other than pg_temp for installing catalog functions (using `TIPG_DB_APPLICATION_SCHEMA` environment variable)
+* re-use pg *connection* for `features_count` and `features`
+* add `tipg.collections.Collection` abstract base class
+
+### Changed
+
+* rename `tipg.collections.Collection -> tipg.collections.PgCollection` **breaking change**
+* update `Collection.get_tile()` and `Collection.features()` signature to expect `request: Request` as first parameter **breaking change**
+* rename `tipg.collections.get_collection_index` to `tipg.collections.pg_get_collection_index` and change the function to use `DatabaseSettings` instance directly instead of keyword option **breaking change**
+* update `tipg.collections.pg_get_collection_index` to return a list of PgCollection instead of a Catalog **breaking change**
+* update `tipg.collections.register_collection_catalog` to pass `db_settings` to `pg_get_collection_index` function **breaking change**
+* remove **deprecated** tiles endpoint with default TileMatrixSet
+* rename tilejson endpoint from `/collections/{collectionId}/{tileMatrixSetId}/tilejson.json` to `/collections/{collectionId}/tiles/{tileMatrixSetId}/tilejson.json` **breaking change**
+* rename stylejson endpoint from `/collections/{collectionId}/{tileMatrixSetId}/style.json` to `/collections/{collectionId}/tiles/{tileMatrixSetId}/style.json` **breaking change**
+* change `database.connect_to_db` input order **breaking change**
+
+    ```python
+    # Before
+    async def connect_to_db(
+        app: FastAPI,
+        settings: Optional[PostgresSettings] = None,
+        schemas: Optional[List[str]] = None,
+        user_sql_files: Optional[List[pathlib.Path]] = None,
+        **kwargs,
+    ) -> None:
+
+    # Now
+    async def connect_to_db(
+        app: FastAPI,
+        *,
+        schemas: List[str],
+        tipg_schema: str = "pg_temp",
+        user_sql_files: Optional[List[pathlib.Path]] = None,
+        settings: Optional[PostgresSettings] = None,
+        **kwargs,
+    ) -> None:
+    ```
+
+### Fixed
+
+* fix URL in HTML templates when behind proxy
+
+## [0.10.1] - 2025-03-04
+
+* remove `PostgresSettings` initialization from main.py
+
+## [0.10.0] - 2025-02-20
+
+* convert tile bbox into collection's CRS for `MVT` where selection (author @callsumzg, https://github.com/developmentseed/tipg/pull/205)
+
+## [0.9.0] - 2025-01-17
+
+* fix serialization of UUID columns (author @giorgiobasile, https://github.com/developmentseed/tipg/pull/199)
+
+* Unify Docker images (deprecate `tipg-uvicorn`)
+
+* Remove `python3.8` support
+
+* Add `python3.13` support
+
 ## [0.8.0] - 2024-10-17
 
 * update `starlette-cramjam` dependency and set compression-level default to 6
@@ -321,7 +390,12 @@ Note: Minor version `0.X.0` update might break the API, It's recommended to pin 
 
 - Initial release
 
-[unreleased]: https://github.com/developmentseed/tipg/compare/0.8.0...HEAD
+[unreleased]: https://github.com/developmentseed/tipg/compare/1.0.1...HEAD
+[1.0.1]: https://github.com/developmentseed/tipg/compare/1.0.0...1.0.1
+[1.0.0]: https://github.com/developmentseed/tipg/compare/0.10.0...1.0.0
+[0.10.1]: https://github.com/developmentseed/tipg/compare/0.10.0...0.10.1
+[0.10.0]: https://github.com/developmentseed/tipg/compare/0.9.0...0.10.0
+[0.9.0]: https://github.com/developmentseed/tipg/compare/0.8.0...0.9.0
 [0.8.0]: https://github.com/developmentseed/tipg/compare/0.7.3...0.8.0
 [0.7.3]: https://github.com/developmentseed/tipg/compare/0.7.2...0.7.3
 [0.7.2]: https://github.com/developmentseed/tipg/compare/0.7.1...0.7.2
