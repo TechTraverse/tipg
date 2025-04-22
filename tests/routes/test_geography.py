@@ -1,6 +1,6 @@
 """test tipg endpoint with table having a geography column."""
 
-from mapbox_vector_tile import decode as mbvt_decode
+import mapbox_vector_tile
 import numpy
 
 
@@ -38,5 +38,5 @@ def test_geography_column(app):
 
     response = app.get("/collections/public.my_data_geo/tiles/WebMercatorQuad/5/11/5")
     assert response.status_code == 200
-    decoded = mbvt_decode(response.content)
+    decoded = mapbox_vector_tile.decode(response.content)
     assert len(decoded["default"]["features"])
