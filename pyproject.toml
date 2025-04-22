@@ -48,7 +48,7 @@ test = [
     "httpx",
     "pytest-postgresql",
     "mapbox-vector-tile",
-    "protobuf>=3.0,<4.0",
+    "protobuf",
     "numpy",
 ]
 dev = [
