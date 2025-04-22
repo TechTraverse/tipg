@@ -47,7 +47,7 @@ test = [
     "pytest-benchmark",
     "httpx",
     "pytest-postgresql",
-    "mapbox-vector-tile>=2.1.0",
+    "mapbox-vector-tile",
     "protobuf>=3.0,<4.0",
     "numpy",
 ]
