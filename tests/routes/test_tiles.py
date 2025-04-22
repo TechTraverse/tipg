@@ -1,6 +1,6 @@
 """Test Tiles endpoints."""
 
-import mapbox_vector_tile
+from mapbox_vector_tile import decode as mbvt_decode
 import numpy as np
 
 from tipg.collections import mvt_settings
@@ -85,7 +85,7 @@ def test_tile(app):
     name = "landsat_wrs"
     response = app.get(f"/collections/public.{name}/tiles/WebMercatorQuad/0/0/0")
     assert response.status_code == 200
-    decoded = mapbox_vector_tile.decode(response.content)
+    decoded = mbvt_decode(response.content)
     assert "default" in decoded.keys()
     assert len(decoded["default"]["features"]) == 10000
 
@@ -93,7 +93,7 @@ def test_tile(app):
         f"/collections/public.{name}/tiles/WebMercatorQuad/0/0/0?limit=1000"
     )
     assert response.status_code == 200
-    decoded = mapbox_vector_tile.decode(response.content)
+    decoded = mbvt_decode(response.content)
     assert len(decoded["default"]["features"]) == 1000
     assert sorted(["id", "pr", "row", "path", "ogc_fid"]) == sorted(
         decoded["default"]["features"][0]["properties"]
@@ -103,7 +103,7 @@ def test_tile(app):
         f"/collections/public.{name}/tiles/WebMercatorQuad/0/0/0?limit=1&properties=pr,row,path"
     )
     assert response.status_code == 200
-    decoded = mapbox_vector_tile.decode(response.content)
+    decoded = mbvt_decode(response.content)
     assert sorted(["pr", "row", "path"]) == sorted(
         decoded["default"]["features"][0]["properties"]
     )
@@ -112,7 +112,7 @@ def test_tile(app):
         f"/collections/public.{name}/tiles/WebMercatorQuad/0/0/0?geom-column=geom"
     )
     assert response.status_code == 200
-    decoded = mapbox_vector_tile.decode(response.content)
+    decoded = mbvt_decode(response.content)
     assert len(decoded["default"]["features"]) == 10000
 
     # invalid geometry column name
@@ -132,7 +132,7 @@ def test_tile_custom_name(app):
     name = "landsat_wrs"
     response = app.get(f"/collections/public.{name}/tiles/WebMercatorQuad/0/0/0")
     assert response.status_code == 200
-    decoded = mapbox_vector_tile.decode(response.content)
+    decoded = mbvt_decode(response.content)
     assert name in decoded.keys()
     assert len(decoded[name]["features"]) == 10000
 
@@ -147,7 +147,7 @@ def test_tile_tms(app):
     name = "landsat_wrs"
     response = app.get(f"/collections/public.{name}/tiles/WorldCRS84Quad/0/0/0")
     assert response.status_code == 200
-    decoded = mapbox_vector_tile.decode(response.content)
+    decoded = mbvt_decode(response.content)
     assert "default" in decoded.keys()
     assert len(decoded["default"]["features"]) > 1000
 
@@ -155,7 +155,7 @@ def test_tile_tms(app):
         f"/collections/public.{name}/tiles/WorldCRS84Quad/0/0/0?limit=1000"
     )
     assert response.status_code == 200
-    decoded = mapbox_vector_tile.decode(response.content)
+    decoded = mbvt_decode(response.content)
     assert len(decoded["default"]["features"]) <= 1000
     assert sorted(["id", "pr", "row", "path", "ogc_fid"]) == sorted(
         decoded["default"]["features"][0]["properties"]
@@ -165,7 +165,7 @@ def test_tile_tms(app):
         f"/collections/public.{name}/tiles/WorldCRS84Quad/0/0/0?limit=1&properties=pr,row,path"
     )
     assert response.status_code == 200
-    decoded = mapbox_vector_tile.decode(response.content)
+    decoded = mbvt_decode(response.content)
     assert sorted(["pr", "row", "path"]) == sorted(
         decoded["default"]["features"][0]["properties"]
     )
@@ -181,7 +181,7 @@ def test_tile_tms_custom_name(app):
     name = "landsat_wrs"
     response = app.get(f"/collections/public.{name}/tiles/WorldCRS84Quad/0/0/0")
     assert response.status_code == 200
-    decoded = mapbox_vector_tile.decode(response.content)
+    decoded = mbvt_decode(response.content)
     assert name in decoded.keys()
     assert len(decoded[name]["features"]) > 1000
 

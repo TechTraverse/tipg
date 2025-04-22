@@ -1,6 +1,6 @@
 """test custom SQL functions."""
 
-import mapbox_vector_tile
+from mapbox_vector_tile import decode as mbvt_decode
 import pytest
 
 from tipg.errors import NoPrimaryKey
@@ -201,7 +201,7 @@ def test_tiles_functions(app_functions):
         "/collections/pg_temp.squares/tiles/WebMercatorQuad/3/3/3"
     )
     assert response.status_code == 200
-    decoded = mapbox_vector_tile.decode(response.content)
+    decoded = mbvt_decode(response.content)
     assert len(decoded["default"]["features"]) == 25
 
     # Check default's function are used
@@ -209,7 +209,7 @@ def test_tiles_functions(app_functions):
         "/collections/pg_temp.squares/tiles/WebMercatorQuad/3/3/3?size=2"
     )
     assert response.status_code == 200
-    decoded = mapbox_vector_tile.decode(response.content)
+    decoded = mbvt_decode(response.content)
     assert len(decoded["default"]["features"]) == 483
 
     # Check any geometry input column will work
@@ -217,14 +217,14 @@ def test_tiles_functions(app_functions):
         "/collections/pg_temp.hexagons/tiles/WebMercatorQuad/3/3/3"
     )
     assert response.status_code == 200
-    decoded = mapbox_vector_tile.decode(response.content)
+    decoded = mbvt_decode(response.content)
     assert len(decoded["default"]["features"]) == 12
 
     response = app_functions.get(
         "/collections/pg_temp.hexagons_g/tiles/WebMercatorQuad/3/3/3"
     )
     assert response.status_code == 200
-    decoded = mapbox_vector_tile.decode(response.content)
+    decoded = mbvt_decode(response.content)
     assert len(decoded["default"]["features"]) == 12
 
     # Check function with x/y/z input
@@ -232,7 +232,7 @@ def test_tiles_functions(app_functions):
         "/collections/pg_temp.landsat/tiles/WebMercatorQuad/0/0/0?p=13"
     )
     assert response.status_code == 200
-    decoded = mapbox_vector_tile.decode(response.content)
+    decoded = mbvt_decode(response.content)
     assert len(decoded["default"]["features"]) == 104
     assert decoded["default"]["features"][0]["properties"]["grid_path"] == 13
 
@@ -241,7 +241,7 @@ def test_tiles_functions(app_functions):
         "/collections/pg_temp.landsat/tiles/WebMercatorQuad/0/0/0?p=0"
     )
     assert response.status_code == 200
-    decoded = mapbox_vector_tile.decode(response.content)
+    decoded = mbvt_decode(response.content)
     assert not decoded
 
     # default p=0 so it should return nothing
@@ -249,5 +249,5 @@ def test_tiles_functions(app_functions):
         "/collections/pg_temp.landsat/tiles/WebMercatorQuad/0/0/0"
     )
     assert response.status_code == 200
-    decoded = mapbox_vector_tile.decode(response.content)
+    decoded = mbvt_decode(response.content)
     assert not decoded
